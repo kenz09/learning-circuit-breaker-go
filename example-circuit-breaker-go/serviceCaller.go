@@ -1,42 +1,71 @@
 package main
 
 import (
-	"io/ioutil"
-	"net/http"
+	"errors"
+	"fmt"
 )
 
-type CircuitBreakerState interface {
-	Entry() error
-	Do() (*string, error)
-	Exit() error
+type CircuitBreaker interface {
+	State() string
+	Execute(func()) (interface{}, error)
+	Reset()
+	HalfOpen()
+	IsClosed()
+	Trip(err error)
+	LastError()
 }
 
-type CircuitBreakerClosed struct {
-	httpClient      http.Client
-	failureCount    int64
-	failureTreshold int64
+type CircuitBreakerImpl struct {
+	lastError                      error
+	state                          string
+	failureCounter                 int
+	successCounter                 int
+	failureTreshold                int
+	successTreshold                int
+	allowedHalfOpenRequestTreshold int
 }
 
-func (ths *CircuitBreakerClosed) Do() (*string, error) {
-	resp, err := ths.httpClient.Get("localhost:8000")
-	if err != nil {
-		ths.failureCount++
-		return nil, err
+func (this *CircuitBreakerImpl) Execute(f func() (interface{}, error)) (interface{}, error) {
+	if !this.IsClosed() {
+		return nil, errors.New("Circuit breaker tripped!")
 	}
-	respBody, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		ths.failureCount++
-		return nil, err
+	r, e := f()
+	if e != nil {
+		this.failureCounter++
+		if this.failureCounter > this.failureTreshold {
+			this.Trip(e)
+		}
 	}
-	res := string(respBody)
-	return &res, nil
+
+	return r, e
 }
 
-type CircuitBreakerOpen struct {
+func (this *CircuitBreakerImpl) State() string {
+	return this.state
 }
 
-type CircuitBreakerHalfOpen struct {
+func (this *CircuitBreakerImpl) Reset() {
+	this.state = "closed"
+	this.failureCounter = 0
 }
 
-type ServiceCallerGateway struct {
+func (this *CircuitBreakerImpl) HalfOpen() {
+	this.state = "half-open"
+}
+
+func (this *CircuitBreakerImpl) Trip(err error) {
+	fmt.Println("circuit tripped")
+	fmt.Println(err.Error())
+	this.lastError = err
+	this.state = "open"
+	this.failureCounter = 0
+	this.successCounter = 0
+}
+
+func (this *CircuitBreakerImpl) IsClosed() bool {
+	return this.state == "closed"
+}
+
+func (this *CircuitBreakerImpl) LastError() error {
+	return this.lastError
 }
